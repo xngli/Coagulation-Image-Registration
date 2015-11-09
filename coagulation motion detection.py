@@ -8,11 +8,12 @@ import javabridge
 import bioformats
 from xml.etree import ElementTree as ETree
 
-image_width = 512
-image_height = 256
-windowSize = 100
+image_width = 960
+image_height = 540
+width_offset = 480
+height_offset = 270
 margin = 20
-timeUnit = 0.01
+scalebar = 1
 E = 1e6
 R = 250e-6
 L = 1000e-6
@@ -121,7 +122,7 @@ class AppForm(QMainWindow):
         return action
         
     def open_data(self):
-        file_formats = "*.nd2"
+        file_formats = "*.mov"
         self.file_name = QFileDialog.getOpenFileName(self,
                                                      'Select data file',
                                                      file_formats)
@@ -129,13 +130,15 @@ class AppForm(QMainWindow):
         if self.file_name:
             print self.file_name
             self.reader = bioformats.ImageReader(self.file_name)
-            image_np = self.reader.read(z=0, t=10)  # discard the first 10 frames
-            image_np = image_np[:,:,1]
+            image_np = self.reader.read(z=0, t=0)
+            image_np = image_np[height_offset:height_offset+image_height,
+                                width_offset:width_offset+image_width,
+                                1]
             image_np = numpy.uint8((image_np - image_np.min())/image_np.ptp()*255.0)
             image_q = QImage(image_np.data, 
-                             image_np.shape[1], 
-                             image_np.shape[0], 
-                             image_np.shape[1], 
+                             image_width, 
+                             image_height, 
+                             image_width, 
                              QImage.Format_Indexed8)
             self.image_qc = image_q.convertToFormat(QImage.Format_RGB32)
             self.image = QPixmap.fromImage(self.image_qc)
@@ -221,89 +224,74 @@ class AppForm(QMainWindow):
         if len(self.markers) < 2:
             return
         
-        x0 = min(self.markers[0].x(), self.markers[1].x())
-        x1 = max(self.markers[0].x(), self.markers[1].x())
-        y0 = min(self.markers[0].y(), self.markers[1].y())
-        y1 = max(self.markers[0].y(), self.markers[1].y())
+        x0 = min(self.markers[0].x(), self.markers[1].x()) + width_offset
+        x1 = max(self.markers[0].x(), self.markers[1].x()) + width_offset
+        y0 = min(self.markers[0].y(), self.markers[1].y()) + height_offset
+        y1 = max(self.markers[0].y(), self.markers[1].y()) + height_offset
         
         md = bioformats.get_omexml_metadata(self.file_name)
         md = md.encode('utf-8')
         mdroot = ETree.fromstring(md)
-        n = mdroot[1][3].attrib['SizeT']
+        n = mdroot[0][1].attrib['SizeT']
         n = int(float(n))  # number of frames
-        scalebar = mdroot[1][3].attrib['PhysicalSizeX'] 
-        scalebar = float(scalebar)
+#        scalebar = mdroot[1][3].attrib['PhysicalSizeX'] 
+#        scalebar = float(scalebar)
         
         result = []
-        shift = numpy.zeros([n-10, 2])
-        image_np = self.reader.read(z=0, t=10)  # discard the first 10 frames
+        shift = numpy.zeros(n)
+        image_np = self.reader.read(z=0, t=0)
         image_np = image_np[:,:,1]
         imWindow = image_np[y0:y1, x0:x1]
-        for i in range(10, n):
-            self.statusBar().showMessage('Processing %d of %d' % (i-9, n-10))
+        for i in range(0, n):
+            self.statusBar().showMessage('Processing %d of %d' % (i+1, n))
             image_np = self.reader.read(z=0, t=i)
             image_np = image_np[:,:,1]
             image_np = image_np[y0:y1, x0:x1]
-            result = feature.register_translation(imWindow, 
-                                                  image_np, 
-                                                  upsample_factor=100)
-            shift[i-10] = result[0]
+#            result = feature.register_translation(imWindow, 
+#                                                  image_np, 
+#                                                  upsample_factor=100)
+            result = feature.canny(image_np, sigma = 3)  # edge
+            result = (result == True).nonzero()[1]
+            result = numpy.mean(result)
+            print result
+            shift[i] = result
         
-        time = numpy.arange(0, n-10)
+        time = numpy.arange(0, n)
+        timeUnit = 30.0 / n;
         time = numpy.multiply(timeUnit, time)
         
-        shift = -shift
-        x_min = min(shift[:,1])
-        index = numpy.where(shift[:,1] == x_min)
-        index = index[0][0]
-        shift[:,1] = shift[:,1] - x_min
-        shift[:,0] = shift[:,0] - shift[index,0]
+        shift = shift - shift[0]
         
-        pixel_x = shift[:,1]
-        pixel_y = shift[:,0]
-        pixel = numpy.sqrt(pixel_x * pixel_x + pixel_y * pixel_y)
+        pixel_x = shift
         
-        displacement_x = shift[:,1] * scalebar
-        displacement_y = shift[:,0] * scalebar
-        displacement = numpy.sqrt(displacement_x * displacement_x + displacement_y * displacement_y)
-        
+        displacement_x = shift * scalebar
+       
         fig = plt.figure()
         ax = fig.gca()
         plt.plot(time, displacement_x, label = 'X')
-        plt.plot(time, displacement_y, label = 'Y')
-        plt.plot(time, displacement, label = 'Total')
         ax.yaxis.set_minor_locator(AutoMinorLocator(5))
-        plt.xlabel('Time (s)')
+        plt.xlabel('Time (min)')
         plt.ylabel('Displacement (um)')
         plt.legend(loc='lower right')
         plt.grid(which='minor', alpha=0.35)                                                
         plt.grid(which='major', alpha=1)
         plt.show()
         
-        force_x = shift[:,1] * scalebar * springConstant
-        force_y = shift[:,0] * scalebar * springConstant
-        force = numpy.sqrt(force_x * force_x + force_y * force_y)
+        force_x = shift * scalebar * springConstant
         
         plt.savefig(self.file_name[0:-4] + "_force.png", dpi=300)
         numpy.savetxt(self.file_name[0:-4] + "_force.csv", 
                       numpy.transpose([time, 
                                        pixel_x, 
-                                       pixel_y, 
-                                       pixel,
                                        displacement_x, 
-                                       displacement_y, 
-                                       displacement,
-                                       force_x, 
-                                       force_y, 
-                                       force]), 
+                                       force_x]), 
                       fmt='%1.3f', 
                       delimiter='\t',
-                      header='t(s)\tpx\tpy\tp\tx(um)\ty(um)\ttotal(um)\tfx(uN)\tfy(uN)\tf(uN)',
+                      header='t(s)\tpx\tx(um)\tfx(uN)',
                       comments='')
         
 def main():
-    javabridge.start_vm(class_path=bioformats.JARS, 
-                        max_heap_size='8G')
+    javabridge.start_vm(class_path=bioformats.JARS)
     app = QApplication(sys.argv)
     form = AppForm()
     form.show()
