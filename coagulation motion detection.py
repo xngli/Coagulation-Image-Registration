@@ -13,11 +13,12 @@ image_height = 540
 width_offset = 480
 height_offset = 270
 margin = 20
-scalebar = 1
+scalebar = 5.376
 E = 1e6
-R = 250e-6
-L = 1000e-6
-springConstant = E*R*R*R*R/(2*L*L*L)
+b = 2e-3
+h = 280e-6
+L = 15e-3
+springConstant = 16*E*b*h*h*h/(L*L*L)
 
 class AppForm(QMainWindow):
     def __init__(self, parent=None):
@@ -260,24 +261,21 @@ class AppForm(QMainWindow):
         timeUnit = 30.0 / n;
         time = numpy.multiply(timeUnit, time)
         
-        shift = shift - shift[0]
-        
-        pixel_x = shift
-        
+        shift = shift - shift[0] 
+        pixel_x = shift        
         displacement_x = shift * scalebar
-       
+        force_x = shift * scalebar * springConstant
+        
         fig = plt.figure()
         ax = fig.gca()
-        plt.plot(time, displacement_x, label = 'X')
+        plt.plot(time, force_x, label = 'X')
         ax.yaxis.set_minor_locator(AutoMinorLocator(5))
         plt.xlabel('Time (min)')
-        plt.ylabel('Displacement (um)')
+        plt.ylabel('Force (uN)')
         plt.legend(loc='lower right')
         plt.grid(which='minor', alpha=0.35)                                                
         plt.grid(which='major', alpha=1)
         plt.show()
-        
-        force_x = shift * scalebar * springConstant
         
         plt.savefig(self.file_name[0:-4] + "_force.png", dpi=300)
         numpy.savetxt(self.file_name[0:-4] + "_force.csv", 
